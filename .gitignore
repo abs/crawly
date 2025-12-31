@@ -13,3 +13,7 @@ erl_crash.dump
 crawly.iml
 .write_to_filetests
 dets_simple_storage
+
+.direnv
+.nix-hex
+.nix-mix

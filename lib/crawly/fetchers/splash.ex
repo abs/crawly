@@ -30,7 +30,7 @@ defmodule Crawly.Fetchers.Splash do
   def fetch(request, client_options) do
     {base_url, other_options} =
       case Keyword.pop(client_options, :base_url, nil) do
-        nil ->
+        {nil, _} ->
           throw(
             "The base_url is not set. Splash fetcher can't be used! " <>
               "Please set :base_url in fetcher options to continue. " <>
@@ -50,8 +50,10 @@ defmodule Crawly.Fetchers.Splash do
       |> URI.to_string()
 
     case HTTPoison.get(url, request.headers, request.options) do
-      {:ok, response} ->
-        new_request = %HTTPoison.Request{response.request | url: request.url}
+      {:ok,
+       %HTTPoison.Response{request: %HTTPoison.Request{} = orig_request} =
+           response} ->
+        new_request = %HTTPoison.Request{orig_request | url: request.url}
 
         new_response = %HTTPoison.Response{
           response
