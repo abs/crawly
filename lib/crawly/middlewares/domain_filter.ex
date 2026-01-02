@@ -2,9 +2,9 @@ defmodule Crawly.Middlewares.DomainFilter do
   @moduledoc """
   Filters out requests which are going outside of the crawled domain.
 
-  The domain that is used to compare against the request url is obtained from the spider's `c:Crawly.Spider.base_url` callback.
-
-  Does not accept any options. Tuple-based configuration options will be ignored.
+  The domain is obtained from:
+  1. `base_url` setting passed at spider start (preferred)
+  2. Spider's `c:Crawly.Spider.base_url` callback (fallback)
 
   ### Example Declaration
   ```
@@ -12,13 +12,24 @@ defmodule Crawly.Middlewares.DomainFilter do
     Crawly.Middlewares.DomainFilter
   ]
   ```
+
+  ### Dynamic base_url
+  ```
+  Crawly.Engine.start_spider(MySpider, base_url: "https://example.com")
+  ```
   """
 
   @behaviour Crawly.Pipeline
   require Logger
 
   def run(request, state, _opts \\ []) do
-    base_url = state.spider_name.base_url()
+    base_url =
+      Crawly.Utils.get_settings(
+        :base_url,
+        state.spider_name,
+        state.spider_name.base_url()
+      )
+
     parsed_url = URI.parse(request.url)
     host = parsed_url.host
 
