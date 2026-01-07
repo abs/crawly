@@ -53,6 +53,9 @@ defmodule Crawly.Manager do
 
   @impl true
   def init([spider_name, options]) do
+    # Store runtime options for access via get_settings
+    :persistent_term.put({:crawly_spider_options, spider_name}, options)
+
     crawl_id = Keyword.get(options, :crawl_id)
     Logger.metadata(spider_name: spider_name, crawl_id: crawl_id)
 

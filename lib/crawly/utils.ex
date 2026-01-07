@@ -150,42 +150,11 @@ defmodule Crawly.Utils do
   end
 
   @doc """
-  Returns a list of known modules which implements Crawly.Spider behaviour
+  Returns a list of registered spiders.
   """
   @spec list_spiders() :: [module()]
   def list_spiders() do
-    modules = get_modules_from_applications() ++ registered_spiders()
-
-    Enum.reduce(
-      modules,
-      [],
-      fn mod, acc ->
-        try do
-          behaviors =
-            Keyword.take(mod.module_info(:attributes), [:behaviour])
-            |> Keyword.values()
-            |> List.flatten()
-
-          module_has_spider_behaviour =
-            Enum.any?(behaviors, fn beh -> beh == Crawly.Spider end)
-
-          case module_has_spider_behaviour do
-            true ->
-              [mod] ++ acc
-
-            false ->
-              acc
-          end
-        rescue
-          error ->
-            Logger.debug(
-              "Could not classify module #{mod} as spider: #{inspect(error)}"
-            )
-
-            acc
-        end
-      end
-    )
+    registered_spiders()
   end
 
   @doc """
@@ -416,12 +385,23 @@ defmodule Crawly.Utils do
   defp get_spider_setting(_setting_name, nil), do: nil
 
   defp get_spider_setting(setting_name, spider_name) do
-    case function_exported?(spider_name, :override_settings, 0) do
-      true ->
-        Keyword.get(spider_name.override_settings(), setting_name, nil)
+    # First check runtime options passed to start_spider
+    runtime_opts =
+      :persistent_term.get({:crawly_spider_options, spider_name}, [])
 
-      false ->
-        nil
+    runtime_value = Keyword.get(runtime_opts, setting_name)
+
+    if runtime_value != nil do
+      runtime_value
+    else
+      # Fall back to override_settings callback
+      case function_exported?(spider_name, :override_settings, 0) do
+        true ->
+          Keyword.get(spider_name.override_settings(), setting_name, nil)
+
+        false ->
+          nil
+      end
     end
   end
 

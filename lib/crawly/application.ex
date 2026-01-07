@@ -8,8 +8,6 @@ defmodule Crawly.Application do
   def start(_type, _args) do
     # Start simple storage of crawly
     Crawly.SimpleStorage.init()
-    # Load spiders from SimpleStorage and SPIDERS_DIR
-    Crawly.load_spiders()
 
     import Supervisor.Spec, warn: false
     # List all child processes to be supervised
