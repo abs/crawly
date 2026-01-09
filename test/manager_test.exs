@@ -24,9 +24,19 @@ defmodule ManagerTest do
     end)
   end
 
+  # This test passes but is misleading - it only proves start_spider returns :ok.
+  # The actual storage of 800K URLs happens async via Task.start (see manager.ex:158).
+  #
+  # Real bottleneck: RequestsStorage.Worker.handle_call({:store, requests}, ...)
+  # processes all requests sequentially in one blocking GenServer call, running
+  # each through the middleware pipeline. This blocks pop() calls from workers.
+  #
+  # To fix properly:
+  # 1. Batch async storage into chunks (e.g., 1000 at a time)
+  # 2. Use handle_cast instead of blocking handle_call
+  # 3. Or stream requests lazily instead of storing all upfront
   @tag :skip
   test "manager does not crash with high number of urls" do
-    # todo Crawly.RequestsStorage is a bottleneck
     urls =
       for i <- 0..800_000 do
         "https://www.example.com/#{i}"
