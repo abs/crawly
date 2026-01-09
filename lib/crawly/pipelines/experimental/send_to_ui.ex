@@ -8,8 +8,8 @@ defmodule Crawly.Pipelines.Experimental.SendToUI do
   def run(item, state, opts \\ []) do
     job_tag =
       Map.get_lazy(state, :job_tag, fn ->
-        {:ok, job_tag} = Crawly.Engine.get_crawl_id(state.spider_name)
-        job_tag
+        # Use crawl_id from state directly (already available in pipeline state)
+        state.crawl_id
       end)
 
     spider_name = state.spider_name |> Atom.to_string()

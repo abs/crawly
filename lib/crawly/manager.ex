@@ -34,10 +34,12 @@ defmodule Crawly.Manager do
 
   alias Crawly.{Engine, Utils}
 
-  @spec add_workers(module(), non_neg_integer()) ::
+  @type spider_key() :: {Crawly.spider(), crawl_id :: binary()}
+
+  @spec add_workers(spider_key(), non_neg_integer()) ::
           :ok | {:error, :spider_non_exist}
-  def add_workers(spider_name, num_of_workers) do
-    case Engine.get_manager(spider_name) do
+  def add_workers(spider_key, num_of_workers) do
+    case Engine.get_manager(spider_key) do
       {:error, reason} ->
         {:error, reason}
 
@@ -53,10 +55,12 @@ defmodule Crawly.Manager do
 
   @impl true
   def init([spider_name, options]) do
+    crawl_id = Keyword.get(options, :crawl_id)
+    spider_key = {spider_name, crawl_id}
+
     # Store runtime options for access via get_settings
     :persistent_term.put({:crawly_spider_options, spider_name}, options)
 
-    crawl_id = Keyword.get(options, :crawl_id)
     Logger.metadata(spider_name: spider_name, crawl_id: crawl_id)
 
     itemcount_limit =
@@ -93,10 +97,13 @@ defmodule Crawly.Manager do
         Utils.get_settings(:concurrent_requests_per_domain, spider_name, 4)
       )
 
+    worker_sup_name =
+      Crawly.ManagerSup.worker_supervisor_name(spider_name, crawl_id)
+
     worker_pids =
       Enum.map(1..num_workers, fn _x ->
         DynamicSupervisor.start_child(
-          spider_name,
+          worker_sup_name,
           {Crawly.Worker, [spider_name: spider_name, crawl_id: crawl_id]}
         )
       end)
@@ -115,6 +122,8 @@ defmodule Crawly.Manager do
      %{
        name: spider_name,
        crawl_id: crawl_id,
+       spider_key: spider_key,
+       worker_sup_name: worker_sup_name,
        itemcount_limit: itemcount_limit,
        closespider_timeout_limit: closespider_timeout_limit,
        tref: tref,
@@ -142,10 +151,12 @@ defmodule Crawly.Manager do
     {start_reqs, async_start_reqs} =
       Enum.split(start_requests, @start_request_split_size)
 
-    :ok = Crawly.RequestsStorage.store(state.name, start_reqs)
+    :ok = Crawly.RequestsStorage.store(state.spider_key, start_reqs)
+
+    spider_key = state.spider_key
 
     Task.start(fn ->
-      Crawly.RequestsStorage.store(state.name, async_start_reqs)
+      Crawly.RequestsStorage.store(spider_key, async_start_reqs)
     end)
 
     {:noreply, state}
@@ -157,7 +168,7 @@ defmodule Crawly.Manager do
 
     Enum.each(1..num_of_workers, fn _ ->
       DynamicSupervisor.start_child(
-        state.name,
+        state.worker_sup_name,
         {Crawly.Worker, [spider_name: state.name, crawl_id: state.crawl_id]}
       )
     end)
@@ -170,10 +181,10 @@ defmodule Crawly.Manager do
     Process.cancel_timer(state.tref)
 
     # Close spider if required items count was reached.
-    {:stored_items, items_count} = Crawly.DataStorage.stats(state.name)
+    {:stored_items, items_count} = Crawly.DataStorage.stats(state.spider_key)
 
     {:stored_requests, requests_count} =
-      Crawly.RequestsStorage.stats(state.name)
+      Crawly.RequestsStorage.stats(state.spider_key)
 
     delta = items_count - state.prev_scraped_cnt
 
@@ -181,20 +192,20 @@ defmodule Crawly.Manager do
     Logger.info("Current requests count is: #{requests_count}")
 
     stop_spider_by_requests_count_and_delta(
-      state.name,
+      state.spider_key,
       requests_count,
       delta
     )
 
     maybe_stop_spider_by_itemcount_limit(
-      state.name,
+      state.spider_key,
       items_count,
       state.itemcount_limit
     )
 
     # Close spider in case if it's not scraping items fast enough
     maybe_stop_spider_by_timeout(
-      state.name,
+      state.spider_key,
       delta,
       state.closespider_timeout_limit
     )
@@ -210,38 +221,38 @@ defmodule Crawly.Manager do
   end
 
   defp stop_spider_by_requests_count_and_delta(
-         spider_name,
+         spider_key,
          requests_count,
          delta
        )
        when requests_count == 0 and delta == 0 do
-    Logger.info("Stopping #{inspect(spider_name)}, all requests handled")
+    Logger.info("Stopping #{inspect(spider_key)}, all requests handled")
 
-    Crawly.Engine.stop_spider(spider_name, :spider_finished)
+    Crawly.Engine.stop_spider(spider_key, :spider_finished)
   end
 
   defp stop_spider_by_requests_count_and_delta(_, _, _), do: :ok
 
   defp maybe_stop_spider_by_itemcount_limit(
-         spider_name,
+         spider_key,
          current,
          limit
        )
        when current >= limit do
     Logger.info(
-      "Stopping #{inspect(spider_name)}, closespider_itemcount achieved"
+      "Stopping #{inspect(spider_key)}, closespider_itemcount achieved"
     )
 
-    Crawly.Engine.stop_spider(spider_name, :itemcount_limit)
+    Crawly.Engine.stop_spider(spider_key, :itemcount_limit)
   end
 
   defp maybe_stop_spider_by_itemcount_limit(_, _, _), do: :ok
 
-  defp maybe_stop_spider_by_timeout(spider_name, current, limit)
+  defp maybe_stop_spider_by_timeout(spider_key, current, limit)
        when current <= limit and is_integer(limit) do
-    Logger.info("Stopping #{inspect(spider_name)}, itemcount timeout achieved")
+    Logger.info("Stopping #{inspect(spider_key)}, itemcount timeout achieved")
 
-    Crawly.Engine.stop_spider(spider_name, :itemcount_timeout)
+    Crawly.Engine.stop_spider(spider_key, :itemcount_timeout)
   end
 
   defp maybe_stop_spider_by_timeout(_, _, _), do: :ok

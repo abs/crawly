@@ -48,33 +48,6 @@ defmodule TestSpider do
   end
 end
 
-defmodule UtilsTestSpider do
-  @moduledoc false
-  use Crawly.Spider
-
-  @impl true
-  def init(init_arg) do
-    init_arg
-  end
-
-  @impl Crawly.Spider
-  def base_url() do
-    "https://www.example.com"
-  end
-
-  @impl Crawly.Spider
-  def init() do
-    [
-      start_urls: ["https://www.example.com"]
-    ]
-  end
-
-  @impl Crawly.Spider
-  def parse_item(_response) do
-    {[], []}
-  end
-end
-
 defmodule PipelineTestSpider do
   @moduledoc false
   use Crawly.Spider

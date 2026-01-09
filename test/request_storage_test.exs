@@ -8,7 +8,9 @@ defmodule RequestStorageTest do
   end
 
   setup do
-    {:ok, pid} = Crawly.RequestsStorage.start_worker(:test_spider, "crawl_id")
+    crawl_id = "crawl_id"
+    {:ok, pid} = Crawly.RequestsStorage.start_worker(:test_spider, crawl_id)
+    spider_key = {:test_spider, crawl_id}
 
     on_exit(fn ->
       :ok =
@@ -20,7 +22,7 @@ defmodule RequestStorageTest do
       # :ok = Crawly.RequestsStorage.WorkerSup.terminate_child(pid)
     end)
 
-    {:ok, %{crawler: :test_spider}}
+    {:ok, %{crawler: :test_spider, spider_key: spider_key}}
   end
 
   test "Request storage can store requests", context do
@@ -30,8 +32,8 @@ defmodule RequestStorageTest do
       options: []
     }
 
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
-    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.crawler)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
+    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.spider_key)
     assert 1 == num
   end
 
@@ -42,26 +44,28 @@ defmodule RequestStorageTest do
       options: []
     }
 
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
 
-    returned_request = Crawly.RequestsStorage.pop(context.crawler)
+    returned_request = Crawly.RequestsStorage.pop(context.spider_key)
     assert request.url == returned_request.url
   end
 
   test "Correct error returned if there are no requests in storage", context do
-    assert nil == Crawly.RequestsStorage.pop(context.crawler)
+    assert nil == Crawly.RequestsStorage.pop(context.spider_key)
   end
 
   test "Error for unknown spiders (storages)" do
-    assert {:error, :storage_worker_not_running} ==
-             Crawly.RequestsStorage.pop(:unknown)
+    unknown_key = {:unknown, "unknown"}
 
     assert {:error, :storage_worker_not_running} ==
-             Crawly.RequestsStorage.stats(:unknown)
+             Crawly.RequestsStorage.pop(unknown_key)
+
+    assert {:error, :storage_worker_not_running} ==
+             Crawly.RequestsStorage.stats(unknown_key)
 
     assert {:error, :storage_worker_not_running} ==
              Crawly.RequestsStorage.store(
-               :unknown,
+               unknown_key,
                Crawly.Utils.request_from_url("http://example.com")
              )
   end
@@ -69,10 +73,10 @@ defmodule RequestStorageTest do
   test "Duplicated requests are filtered out", context do
     request = Crawly.Utils.request_from_url("http://example.com")
 
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
 
-    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.crawler)
+    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.spider_key)
     assert 1 == num
   end
 
@@ -92,8 +96,8 @@ defmodule RequestStorageTest do
   test "Outbound requests are filtered out", context do
     request = Crawly.Utils.request_from_url("http://otherdomain.com")
 
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
-    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.crawler)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
+    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.spider_key)
     assert 0 == num
   end
 
@@ -105,8 +109,8 @@ defmodule RequestStorageTest do
       _, _url -> :crawlable
     end)
 
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
-    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.crawler)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
+    {:stored_requests, num} = Crawly.RequestsStorage.stats(context.spider_key)
     assert 0 == num
   end
 
@@ -117,17 +121,17 @@ defmodule RequestStorageTest do
       options: []
     }
 
-    :ok = Crawly.RequestsStorage.store(context.crawler, request)
+    :ok = Crawly.RequestsStorage.store(context.spider_key, request)
 
     {:requests, [stored_request]} =
-      Crawly.RequestsStorage.requests(context.crawler)
+      Crawly.RequestsStorage.requests(context.spider_key)
 
     assert request == stored_request
   end
 
   test "Getting requests list from the requests storage if nothing is there",
        context do
-    {:requests, req_lists} = Crawly.RequestsStorage.requests(context.crawler)
+    {:requests, req_lists} = Crawly.RequestsStorage.requests(context.spider_key)
 
     assert req_lists == []
   end

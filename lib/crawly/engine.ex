@@ -13,7 +13,8 @@ defmodule Crawly.Engine do
           known_spiders: [Crawly.spider()]
         }
 
-  @type started_spiders() :: %{optional(Crawly.spider()) => identifier()}
+  @type spider_key() :: {Crawly.spider(), crawl_id :: binary()}
+  @type started_spiders() :: %{optional(spider_key()) => identifier()}
 
   @type spider_info() :: %{
           name: Crawly.spider(),
@@ -81,9 +82,9 @@ defmodule Crawly.Engine do
     )
   end
 
-  @spec get_manager(Crawly.spider()) :: pid() | {:error, :spider_not_found}
-  def get_manager(spider_name) do
-    case Map.fetch(running_spiders(), spider_name) do
+  @spec get_manager(spider_key()) :: pid() | {:error, :spider_not_found}
+  def get_manager({spider_name, crawl_id}) do
+    case Map.fetch(running_spiders(), {spider_name, crawl_id}) do
       :error ->
         {:error, :spider_not_found}
 
@@ -100,12 +101,47 @@ defmodule Crawly.Engine do
     end
   end
 
-  @spec stop_spider(Crawly.spider(), reason) :: result
+  @spec stop_spider(spider_key(), reason) :: result
         when reason: :itemcount_limit | :itemcount_timeout | atom(),
              result:
                :ok | {:error, :spider_not_running} | {:error, :spider_not_found}
-  def stop_spider(spider_name, reason \\ :ignore) do
-    GenServer.call(__MODULE__, {:stop_spider, spider_name, reason})
+  def stop_spider(spider_key, reason \\ :ignore)
+
+  def stop_spider({spider_name, crawl_id}, reason) do
+    GenServer.call(__MODULE__, {:stop_spider, {spider_name, crawl_id}, reason})
+  end
+
+  @doc """
+  Stop all running instances of a spider module.
+  Useful for test cleanup when you don't have the crawl_id.
+  """
+  @spec stop_spider_by_name(Crawly.spider(), reason :: atom()) :: :ok
+  def stop_spider_by_name(spider_name, reason \\ :ignore)
+      when is_atom(spider_name) do
+    running = running_spiders()
+
+    running
+    |> Enum.filter(fn {{name, _crawl_id}, _} -> name == spider_name end)
+    |> Enum.each(fn {{name, crawl_id}, _} ->
+      stop_spider({name, crawl_id}, reason)
+    end)
+
+    :ok
+  end
+
+  @doc """
+  Get the first running instance's crawl_id for a spider module.
+  Useful for tests when you know there's only one instance.
+  Returns nil if no instances are running.
+  """
+  @spec get_running_crawl_id(Crawly.spider()) :: binary() | nil
+  def get_running_crawl_id(spider_name) when is_atom(spider_name) do
+    running = running_spiders()
+
+    case Enum.find(running, fn {{name, _}, _} -> name == spider_name end) do
+      {{_, crawl_id}, _} -> crawl_id
+      nil -> nil
+    end
   end
 
   @spec list_known_spiders() :: [spider_info()]
@@ -118,9 +154,9 @@ defmodule Crawly.Engine do
     GenServer.call(__MODULE__, :running_spiders)
   end
 
-  @spec get_spider_info(Crawly.spider()) :: spider_info() | nil
-  def get_spider_info(spider_name) do
-    GenServer.call(__MODULE__, {:get_spider, spider_name})
+  @spec get_spider_info(spider_key()) :: spider_info() | nil
+  def get_spider_info(spider_key) do
+    GenServer.call(__MODULE__, {:get_spider, spider_key})
   end
 
   def refresh_spider_list() do
@@ -131,10 +167,10 @@ defmodule Crawly.Engine do
     GenServer.start_link(__MODULE__, [], name: __MODULE__)
   end
 
-  @spec get_crawl_id(Crawly.spider()) ::
+  @spec get_crawl_id(spider_key()) ::
           {:error, :spider_not_running} | {:ok, binary()}
-  def get_crawl_id(spider_name) do
-    GenServer.call(__MODULE__, {:get_crawl_id, spider_name})
+  def get_crawl_id(spider_key) do
+    GenServer.call(__MODULE__, {:get_crawl_id, spider_key})
   end
 
   @spec init(any) :: {:ok, t()}
@@ -148,22 +184,22 @@ defmodule Crawly.Engine do
     {:noreply, %{state | known_spiders: spiders}}
   end
 
-  def handle_call({:get_manager, spider_name}, _, state) do
+  def handle_call({:get_manager, spider_key}, _, state) do
     pid =
-      case Map.get(state.started_spiders, spider_name) do
+      case Map.get(state.started_spiders, spider_key) do
         nil ->
           {:error, :spider_not_found}
 
-        pid ->
+        {pid, _crawl_id} ->
           pid
       end
 
     {:reply, pid, state}
   end
 
-  def handle_call({:get_crawl_id, spider_name}, _from, state) do
+  def handle_call({:get_crawl_id, spider_key}, _from, state) do
     msg =
-      case Map.get(state.started_spiders, spider_name) do
+      case Map.get(state.started_spiders, spider_key) do
         nil ->
           {:error, :spider_not_running}
 
@@ -188,8 +224,10 @@ defmodule Crawly.Engine do
         _form,
         %Crawly.Engine{} = state
       ) do
+    spider_key = {spider_name, crawl_id}
+
     result =
-      case Map.get(state.started_spiders, spider_name) do
+      case Map.get(state.started_spiders, spider_key) do
         nil ->
           Crawly.EngineSup.start_spider(spider_name, options)
 
@@ -203,7 +241,7 @@ defmodule Crawly.Engine do
           # Insert information about the job into storage
           Crawly.Models.Job.new(crawl_id, spider_name)
 
-          {:ok, Map.put(state.started_spiders, spider_name, {pid, crawl_id})}
+          {:ok, Map.put(state.started_spiders, spider_key, {pid, crawl_id})}
 
         {:error, _} = err ->
           {err, state.started_spiders}
@@ -213,16 +251,16 @@ defmodule Crawly.Engine do
   end
 
   def handle_call(
-        {:stop_spider, spider_name, reason},
+        {:stop_spider, {spider_name, crawl_id} = spider_key, reason},
         _form,
         %Crawly.Engine{} = state
       ) do
     {msg, new_started_spiders} =
-      case Map.pop(state.started_spiders, spider_name) do
+      case Map.pop(state.started_spiders, spider_key) do
         {nil, _} ->
           {{:error, :spider_not_running}, state.started_spiders}
 
-        {{pid, crawl_id}, new_started_spiders} ->
+        {{pid, ^crawl_id}, new_started_spiders} ->
           case Crawly.Utils.get_settings(
                  :on_spider_closed_callback,
                  spider_name
@@ -232,7 +270,7 @@ defmodule Crawly.Engine do
           end
 
           # Update jobs log information
-          {:stored_items, num} = Crawly.DataStorage.stats(spider_name)
+          {:stored_items, num} = Crawly.DataStorage.stats(spider_key)
           Crawly.Models.Job.update(crawl_id, num, reason)
 
           Crawly.EngineSup.stop_spider(pid)
@@ -243,10 +281,14 @@ defmodule Crawly.Engine do
     {:reply, msg, %Crawly.Engine{state | started_spiders: new_started_spiders}}
   end
 
-  def handle_call({:get_spider, spider_name}, _from, state) do
+  def handle_call(
+        {:get_spider, {spider_name, _crawl_id} = spider_key},
+        _from,
+        state
+      ) do
     return =
       if Enum.member?(state.known_spiders, spider_name) do
-        format_spider_info(spider_name, state)
+        format_spider_info(spider_key, state)
       end
 
     {:reply, return, state}
@@ -258,13 +300,32 @@ defmodule Crawly.Engine do
   end
 
   # this function generates a spider_info map for each spider known
-  defp format_spider_info(spider_name, state) do
-    pid = Map.get(state.started_spiders, spider_name)
+  # When given just a spider module name, check if any instances are running
+  defp format_spider_info(spider_name, state) when is_atom(spider_name) do
+    # Find any running instance of this spider module
+    running_instance =
+      Enum.find(state.started_spiders, fn
+        {{name, _crawl_id}, _} -> name == spider_name
+        _ -> false
+      end)
+
+    case running_instance do
+      nil ->
+        %{name: spider_name, status: :stopped, pid: nil}
+
+      {{^spider_name, _crawl_id}, {pid, _}} ->
+        %{name: spider_name, status: :started, pid: pid}
+    end
+  end
+
+  # When given a tuple key, look up that specific instance
+  defp format_spider_info({spider_name, _crawl_id} = spider_key, state) do
+    entry = Map.get(state.started_spiders, spider_key)
 
     %{
       name: spider_name,
-      status: if(is_nil(pid), do: :stopped, else: :started),
-      pid: pid
+      status: if(is_nil(entry), do: :stopped, else: :started),
+      pid: if(entry, do: elem(entry, 0), else: nil)
     }
   end
 

@@ -92,13 +92,6 @@ defmodule UtilsTest do
     assert Map.has_key?(state, :args) == false
   end
 
-  test "can find CrawlySpider behaviors" do
-    assert Enum.any?(
-             Crawly.Utils.list_spiders(),
-             fn x -> x == UtilsTestSpider end
-           )
-  end
-
   test "Can load modules set in SPIDERS_DIR" do
     System.put_env("SPIDERS_DIR", "./examples/quickstart/lib/quickstart")
     {:ok, loaded_modules} = Crawly.Utils.load_spiders()

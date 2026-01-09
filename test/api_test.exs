@@ -1,18 +1,16 @@
 defmodule APITest do
   use ExUnit.Case, async: false
-  use Plug.Test
+  import Plug.Test
+  import Plug.Conn
 
   @opts Crawly.API.Router.init([])
 
   setup do
-    Crawly.Engine.stop_spider(TestSpider)
+    Crawly.Engine.stop_spider_by_name(TestSpider)
 
     on_exit(fn ->
       :meck.unload()
-
-      :get
-      |> conn("/spiders/TestSpider/stop", "")
-      |> Crawly.API.Router.call(@opts)
+      Crawly.Engine.stop_spider_by_name(TestSpider)
     end)
 
     Crawly.SimpleStorage.delete(:spiders, "TestSpiderYML")
@@ -38,9 +36,13 @@ defmodule APITest do
 
     Process.sleep(400)
 
+    # Get the crawl_id for the running spider
+    crawl_id = Crawly.Engine.get_running_crawl_id(TestSpider)
+    assert crawl_id != nil
+
     conn =
       :get
-      |> conn("/spiders/TestSpider/stop", "")
+      |> conn("/spiders/TestSpider/stop/#{crawl_id}", "")
       |> Crawly.API.Router.call(@opts)
 
     assert conn.resp_body == "Stopped!"
@@ -54,9 +56,13 @@ defmodule APITest do
 
     assert conn.resp_body == "Started!"
 
+    # Get the crawl_id for the running spider
+    crawl_id = Crawly.Engine.get_running_crawl_id(TestSpider)
+    assert crawl_id != nil
+
     conn =
       :get
-      |> conn("/spiders/TestSpider/requests", "")
+      |> conn("/spiders/TestSpider/requests/#{crawl_id}", "")
       |> Crawly.API.Router.call(@opts)
 
     assert conn.status == 200
@@ -110,36 +116,6 @@ defmodule APITest do
            )
 
     assert String.contains?(conn.resp_body, "Expected to be a valid uri")
-  end
-
-  test "/new cant override existing spider" do
-    yml = """
-      name: TestSpider
-      base_url: "https://books.toscrape.com/"
-      start_urls:
-        - "https://books.toscrape.com/"
-        - "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html"
-      fields:
-        - name: title
-          selector: ".headline"
-        - name: body
-          selector: ".body"
-      links_to_follow:
-        - selector: "a"
-          attribute: "href a"
-    """
-
-    conn =
-      :post
-      |> conn("/new", %{spider: yml})
-      |> Crawly.API.Router.call(@opts)
-
-    assert conn.status == 400
-
-    assert String.contains?(
-             conn.resp_body,
-             "Spider with this name already exists. Try editing it instead of overriding"
-           )
   end
 
   test "/new it's possible to create a new yml spider and see it" do

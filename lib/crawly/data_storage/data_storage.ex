@@ -27,25 +27,27 @@ defmodule Crawly.DataStorage do
 
   use GenServer
 
+  @type spider_key() :: {Crawly.spider(), crawl_id :: binary()}
+
   defstruct workers: %{}, pid_spiders: %{}
 
   def start_worker(spider_name, crawl_id) do
-    GenServer.call(__MODULE__, {:start_worker, spider_name, crawl_id})
+    GenServer.call(__MODULE__, {:start_worker, {spider_name, crawl_id}})
   end
 
-  @spec store(atom(), map()) :: :ok
-  def store(spider, item) do
-    GenServer.call(__MODULE__, {:store, spider, item})
+  @spec store(spider_key(), map()) :: :ok
+  def store(spider_key, item) do
+    GenServer.call(__MODULE__, {:store, spider_key, item})
   end
 
-  def stats(spider) do
-    GenServer.call(__MODULE__, {:stats, spider})
+  def stats(spider_key) do
+    GenServer.call(__MODULE__, {:stats, spider_key})
   end
 
-  @spec inspect(atom(), term()) ::
+  @spec inspect(spider_key(), term()) ::
           {:error, :data_storage_worker_not_running} | term()
-  def inspect(spider, field) do
-    GenServer.call(__MODULE__, {:inspect, spider, field})
+  def inspect(spider_key, field) do
+    GenServer.call(__MODULE__, {:inspect, spider_key, field})
   end
 
   def start_link([]) do
@@ -58,11 +60,11 @@ defmodule Crawly.DataStorage do
     {:ok, %Crawly.DataStorage{workers: %{}, pid_spiders: %{}}}
   end
 
-  def handle_call({:store, spider, item}, _from, state) do
+  def handle_call({:store, spider_key, item}, _from, state) do
     %{workers: workers} = state
 
     message =
-      case Map.get(workers, spider) do
+      case Map.get(workers, spider_key) do
         nil ->
           {:error, :data_storage_worker_not_running}
 
@@ -74,17 +76,17 @@ defmodule Crawly.DataStorage do
   end
 
   def handle_call(
-        {:start_worker, spider_name, crawl_id},
+        {:start_worker, {spider_name, crawl_id} = spider_key},
         _from,
         %Crawly.DataStorage{} = state
       ) do
     {msg, new_state} =
-      case Map.get(state.workers, spider_name) do
+      case Map.get(state.workers, spider_key) do
         nil ->
           pid = do_start_worker(spider_name, crawl_id)
 
-          new_workers = Map.put(state.workers, spider_name, pid)
-          new_spider_pids = Map.put(state.pid_spiders, pid, spider_name)
+          new_workers = Map.put(state.workers, spider_key, pid)
+          new_spider_pids = Map.put(state.pid_spiders, pid, spider_key)
 
           new_state = %Crawly.DataStorage{
             state
@@ -101,9 +103,9 @@ defmodule Crawly.DataStorage do
     {:reply, msg, new_state}
   end
 
-  def handle_call({:stats, spider_name}, _from, state) do
+  def handle_call({:stats, spider_key}, _from, state) do
     msg =
-      case Map.get(state.workers, spider_name) do
+      case Map.get(state.workers, spider_key) do
         nil ->
           {:error, :data_storage_worker_not_running}
 
@@ -114,9 +116,9 @@ defmodule Crawly.DataStorage do
     {:reply, msg, state}
   end
 
-  def handle_call({:inspect, spider_name, field}, _from, state) do
+  def handle_call({:inspect, spider_key, field}, _from, state) do
     msg =
-      case Map.get(state.workers, spider_name) do
+      case Map.get(state.workers, spider_key) do
         nil ->
           {:error, :data_storage_worker_not_running}
 
@@ -129,9 +131,9 @@ defmodule Crawly.DataStorage do
 
   # Clean up worker
   def handle_info({:DOWN, _ref, :process, pid, _}, state) do
-    spider_name = Map.get(state.pid_spiders, pid)
+    spider_key = Map.get(state.pid_spiders, pid)
     new_pid_spiders = Map.delete(state.pid_spiders, pid)
-    new_workers = Map.delete(state.workers, spider_name)
+    new_workers = Map.delete(state.workers, spider_key)
     new_state = %{state | workers: new_workers, pid_spiders: new_pid_spiders}
 
     {:noreply, new_state}

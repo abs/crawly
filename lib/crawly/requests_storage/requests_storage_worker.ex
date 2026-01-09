@@ -94,6 +94,14 @@ defmodule Crawly.RequestsStorage.Worker do
   defp do_call(pid, command) do
     GenServer.call(pid, command)
   catch
+    :exit, {:shutdown, _} ->
+      # Expected during test cleanup, ignore
+      :ok
+
+    :exit, :shutdown ->
+      # Expected during test cleanup, ignore
+      :ok
+
     error, reason ->
       Logger.error(Exception.format(error, reason, __STACKTRACE__))
   end

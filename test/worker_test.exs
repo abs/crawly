@@ -7,17 +7,22 @@ defmodule WorkerTest do
       :meck.expect(Crawly.RequestsStorage, :store, fn _, _ -> :ok end)
 
       spider_name = Elixir.TestWorker
+      crawl_id = "crawl_id"
+      worker_sup_name = :"#{spider_name}_#{crawl_id}"
 
       {:ok, storage_pid} =
-        Crawly.DataStorage.start_worker(spider_name, "crawl_id")
+        Crawly.DataStorage.start_worker(spider_name, crawl_id)
 
       {:ok, workers_sup} =
-        DynamicSupervisor.start_link(strategy: :one_for_one, name: spider_name)
+        DynamicSupervisor.start_link(
+          strategy: :one_for_one,
+          name: worker_sup_name
+        )
 
       {:ok, pid} =
         DynamicSupervisor.start_child(
-          spider_name,
-          {Crawly.Worker, [spider_name: spider_name, crawl_id: "crawl_id"]}
+          worker_sup_name,
+          {Crawly.Worker, [spider_name: spider_name, crawl_id: crawl_id]}
         )
 
       on_exit(fn ->
@@ -54,25 +59,31 @@ defmodule WorkerTest do
     setup do
       :meck.expect(Crawly.Utils, :send_after, fn _, _, _ -> :ignore end)
       spider_name = Worker.CrashingTestSpider
+      crawl_id = "crawl_id"
+      spider_key = {spider_name, crawl_id}
+      worker_sup_name = :"#{spider_name}_#{crawl_id}"
 
       {:ok, storage_pid} =
-        Crawly.DataStorage.start_worker(spider_name, "crawl_id")
+        Crawly.DataStorage.start_worker(spider_name, crawl_id)
 
       {:ok, workers_sup} =
-        DynamicSupervisor.start_link(strategy: :one_for_one, name: spider_name)
+        DynamicSupervisor.start_link(
+          strategy: :one_for_one,
+          name: worker_sup_name
+        )
 
       {:ok, pid} =
         DynamicSupervisor.start_child(
-          spider_name,
-          {Crawly.Worker, [spider_name: spider_name, crawl_id: "crawl_id"]}
+          worker_sup_name,
+          {Crawly.Worker, [spider_name: spider_name, crawl_id: crawl_id]}
         )
 
       {:ok, requests_storage_pid} =
-        Crawly.RequestsStorage.start_worker(spider_name, "crawl_id")
+        Crawly.RequestsStorage.start_worker(spider_name, crawl_id)
 
       :ok =
         Crawly.RequestsStorage.store(
-          spider_name,
+          spider_key,
           Crawly.Utils.request_from_url("https://www.example.com")
         )
 
@@ -239,7 +250,7 @@ defmodule WorkerTest do
     setup do
       :meck.expect(Crawly.Utils, :send_after, fn _, _, _ -> :ignore end)
 
-      :meck.expect(Crawly.RequestsStorage, :pop, fn TestSpider ->
+      :meck.expect(Crawly.RequestsStorage, :pop, fn _ ->
         Crawly.Utils.request_from_url("https://www.example.com")
       end)
 
@@ -275,8 +286,12 @@ defmodule WorkerTest do
         [parsers: []]
       end)
 
-      Crawly.Worker.handle_info(:work, %{
+      spider_key = {TestSpider, "test-crawl"}
+
+      Crawly.Worker.handle_info(:work, %Crawly.Worker{
         spider_name: TestSpider,
+        crawl_id: "test-crawl",
+        spider_key: spider_key,
         backoff: 10_000
       })
 
@@ -288,23 +303,27 @@ defmodule WorkerTest do
         [parsers: [Worker.TestParser]]
       end)
 
-      :meck.expect(Crawly.RequestsStorage, :store, fn _spider_name, _request ->
+      :meck.expect(Crawly.RequestsStorage, :store, fn _spider_key, _request ->
         :ignore
       end)
 
-      :meck.expect(Crawly.DataStorage, :store, fn _spider_name, _item ->
+      :meck.expect(Crawly.DataStorage, :store, fn _spider_key, _item ->
         :ignore
       end)
 
-      Crawly.Worker.handle_info(:work, %{
+      spider_key = {TestSpider, "test-crawl"}
+
+      Crawly.Worker.handle_info(:work, %Crawly.Worker{
         spider_name: TestSpider,
+        crawl_id: "test-crawl",
+        spider_key: spider_key,
         backoff: 10_000
       })
 
-      assert :meck.called(Crawly.DataStorage, :store, [TestSpider, :_])
+      assert :meck.called(Crawly.DataStorage, :store, [spider_key, :_])
 
       assert :meck.called(Crawly.RequestsStorage, :store, [
-               TestSpider,
+               spider_key,
                :_
              ])
     end

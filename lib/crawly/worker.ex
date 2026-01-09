@@ -11,7 +11,12 @@ defmodule Crawly.Worker do
   @default_backoff 10_000
   @start_timeout 1000
 
-  defstruct backoff: @default_backoff, spider_name: nil, crawl_id: nil
+  @type spider_key() :: {Crawly.spider(), crawl_id :: binary()}
+
+  defstruct backoff: @default_backoff,
+            spider_name: nil,
+            crawl_id: nil,
+            spider_key: nil
 
   def start_link(spider_name: spider_name, crawl_id: crawl_id) do
     GenServer.start_link(__MODULE__,
@@ -28,16 +33,18 @@ defmodule Crawly.Worker do
      %Crawly.Worker{
        crawl_id: crawl_id,
        spider_name: spider_name,
+       spider_key: {spider_name, crawl_id},
        backoff: @default_backoff
      }}
   end
 
   def handle_info(:work, state) do
-    %{spider_name: spider_name, backoff: backoff} = state
+    %{spider_name: spider_name, spider_key: spider_key, backoff: backoff} =
+      state
 
     # Get a request from requests storage.
     new_backoff =
-      case Crawly.RequestsStorage.pop(spider_name) do
+      case Crawly.RequestsStorage.pop(spider_key) do
         nil ->
           # Slow down a bit when there are no new URLs
           backoff * 2
@@ -45,7 +52,8 @@ defmodule Crawly.Worker do
         request ->
           # Process the request
 
-          with {:ok, response} <- get_response({request, spider_name}),
+          with {:ok, response} <-
+                 get_response({request, spider_name, spider_key}),
                {:ok, parsed_item} <- parse_item(response),
                {:ok, :done} <- process_parsed_item(parsed_item) do
             :ok
@@ -65,12 +73,14 @@ defmodule Crawly.Worker do
   end
 
   @doc false
-  @spec get_response({request, spider_name}) :: result
+  @spec get_response({request, spider_name, spider_key}) :: result
         when request: Crawly.Request.t(),
              spider_name: atom(),
+             spider_key: spider_key(),
              response: HTTPoison.Response.t(),
-             result: {:ok, {response, spider_name}} | {:error, term()}
-  def get_response({request, spider_name}) do
+             result:
+               {:ok, {response, spider_name, spider_key}} | {:error, term()}
+  def get_response({request, spider_name, spider_key}) do
     # check if spider-level fetcher is set. Overrides the globally configured fetcher.
     # if not set, log warning for explicit config preferred,
     # get the globally-configured fetcher. Defaults to HTTPoisonFetcher
@@ -88,7 +98,7 @@ defmodule Crawly.Worker do
 
     case fetcher.fetch(request, options) do
       {:error, _reason} = err ->
-        :ok = maybe_retry_request(spider_name, request)
+        :ok = maybe_retry_request(spider_key, request)
         err
 
       {:ok, %HTTPoison.Response{status_code: code} = response} ->
@@ -96,30 +106,30 @@ defmodule Crawly.Worker do
         # it.
         case code in retry_codes do
           true ->
-            :ok = maybe_retry_request(spider_name, request)
+            :ok = maybe_retry_request(spider_key, request)
             {:error, :retry}
 
           false ->
-            {:ok, {response, spider_name}}
+            {:ok, {response, spider_name, spider_key}}
         end
     end
   end
 
   @doc false
-  @spec parse_item({response, spider_name}) :: result
+  @spec parse_item({response, spider_name, spider_key}) :: result
         when response: HTTPoison.Response.t(),
              spider_name: atom(),
-             response: HTTPoison.Response.t(),
+             spider_key: spider_key(),
              parsed_item: Crawly.ParsedItem.t(),
-             next: {parsed_item, response, spider_name},
+             next: {parsed_item, response, spider_name, spider_key},
              result: {:ok, next} | {:error, term()}
-  def parse_item({response, spider_name}) do
+  def parse_item({response, spider_name, spider_key}) do
     try do
       # get parsers
       parsers = Crawly.Utils.get_settings(:parsers, spider_name, nil)
       parsed_item = do_parse(parsers, spider_name, response)
 
-      {:ok, {parsed_item, response, spider_name}}
+      {:ok, {parsed_item, response, spider_name, spider_key}}
     catch
       error, reason ->
         Logger.warning(
@@ -152,12 +162,14 @@ defmodule Crawly.Worker do
     end
   end
 
-  @spec process_parsed_item({parsed_item, response, spider_name}) :: result
+  @spec process_parsed_item({parsed_item, response, spider_name, spider_key}) ::
+          result
         when spider_name: atom(),
+             spider_key: spider_key(),
              response: HTTPoison.Response.t(),
              parsed_item: Crawly.ParsedItem.t(),
              result: {:ok, :done}
-  defp process_parsed_item({parsed_item, response, spider_name}) do
+  defp process_parsed_item({parsed_item, response, _spider_name, spider_key}) do
     requests = Map.get(parsed_item, :requests) || []
     items = Map.get(parsed_item, :items) || []
     # Process all requests one by one
@@ -165,20 +177,25 @@ defmodule Crawly.Worker do
       requests,
       fn request ->
         request = Map.put(request, :prev_response, response)
-        Crawly.RequestsStorage.store(spider_name, request)
+        Crawly.RequestsStorage.store(spider_key, request)
       end
     )
 
     # Process all items one by one
-    Enum.each(items, &Crawly.DataStorage.store(spider_name, &1))
+    Enum.each(items, &Crawly.DataStorage.store(spider_key, &1))
 
     {:ok, :done}
   end
 
   ## Retry a request if max retries allows to do so
-  defp maybe_retry_request(spider, %Crawly.Request{} = request) do
+  defp maybe_retry_request(
+         {spider_name, _crawl_id} = spider_key,
+         %Crawly.Request{} = request
+       ) do
     retries = request.retries
-    retry_settings = Crawly.Utils.get_settings(:retry, spider, Keyword.new())
+
+    retry_settings =
+      Crawly.Utils.get_settings(:retry, spider_name, Keyword.new())
 
     ignored_middlewares = Keyword.get(retry_settings, :ignored_middlewares, [])
     max_retries = Keyword.get(retry_settings, :max_retries, 0)
@@ -195,7 +212,7 @@ defmodule Crawly.Worker do
             retries: retries + 1
         }
 
-        :ok = Crawly.RequestsStorage.store(spider, request)
+        :ok = Crawly.RequestsStorage.store(spider_key, request)
 
       false ->
         Logger.error("Dropping request to #{request.url}, (max retries)")

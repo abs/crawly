@@ -15,8 +15,8 @@ defmodule ManagerTest do
     on_exit(fn ->
       Engine.running_spiders()
       |> Map.keys()
-      |> Enum.each(fn spider ->
-        Engine.stop_spider(spider, :stopped_by_on_exit)
+      |> Enum.each(fn spider_key ->
+        Engine.stop_spider(spider_key, :stopped_by_on_exit)
       end)
 
       :persistent_term.erase(:spider_stop_reason)
@@ -38,32 +38,40 @@ defmodule ManagerTest do
 
   test "it is possible to add more workers to a spider" do
     spider_name = Manager.TestSpider
+    crawl_id = "add_workers_test"
+    spider_key = {spider_name, crawl_id}
+
+    worker_sup_name =
+      Crawly.ManagerSup.worker_supervisor_name(spider_name, crawl_id)
 
     :ok =
       Crawly.Engine.start_spider(spider_name,
-        crawl_id: "add_workers_test",
+        crawl_id: crawl_id,
         concurrent_requests_per_domain: 1
       )
 
     initial_number_of_workers = 1
 
     assert initial_number_of_workers ==
-             DynamicSupervisor.count_children(spider_name)[:workers]
+             DynamicSupervisor.count_children(worker_sup_name)[:workers]
 
     workers = 2
-    assert :ok == Crawly.Manager.add_workers(spider_name, workers)
+    assert :ok == Crawly.Manager.add_workers(spider_key, workers)
 
-    pid = Crawly.Engine.get_manager(spider_name)
+    pid = Crawly.Engine.get_manager(spider_key)
     state = :sys.get_state(pid)
     assert spider_name == state.name
 
     assert initial_number_of_workers + workers ==
-             DynamicSupervisor.count_children(spider_name)[:workers]
+             DynamicSupervisor.count_children(worker_sup_name)[:workers]
   end
 
   test "returns error when spider doesn't exist" do
     assert {:error, :spider_not_found} ==
-             Crawly.Manager.add_workers(Manager.NonExistentSpider, 2)
+             Crawly.Manager.add_workers(
+               {Manager.NonExistentSpider, "unknown"},
+               2
+             )
   end
 
   test "Closespider itemcount is respected" do
@@ -85,23 +93,28 @@ defmodule ManagerTest do
     assert :persistent_term.get(:spider_stop_reason) == :itemcount_timeout
   end
 
-  test "Can't start already started spider" do
-    :ok = Crawly.Engine.start_spider(Manager.TestSpider)
+  test "Can't start already started spider with same crawl_id" do
+    :ok = Crawly.Engine.start_spider(Manager.TestSpider, crawl_id: "same-id")
 
     assert {:error, :spider_already_started} ==
-             Crawly.Engine.start_spider(Manager.TestSpider)
+             Crawly.Engine.start_spider(Manager.TestSpider, crawl_id: "same-id")
   end
 
   test "Spider closed callback is called when spider is stopped" do
-    :ok = Crawly.Engine.start_spider(Manager.TestSpider)
-    :ok = Crawly.Engine.stop_spider(Manager.TestSpider, :manual_stop)
+    :ok =
+      Crawly.Engine.start_spider(Manager.TestSpider,
+        crawl_id: "manual-stop-test"
+      )
+
+    spider_key = {Manager.TestSpider, "manual-stop-test"}
+    :ok = Crawly.Engine.stop_spider(spider_key, :manual_stop)
     assert :persistent_term.get(:spider_stop_reason) == :manual_stop
   end
 
   test "It's possible to start a spider with start_requests" do
     pid = self()
 
-    :meck.expect(Crawly.RequestsStorage, :store, fn _spider, requests ->
+    :meck.expect(Crawly.RequestsStorage, :store, fn _spider_key, requests ->
       send(pid, {:performing_request, requests})
       :ok
     end)

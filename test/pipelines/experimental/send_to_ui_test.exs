@@ -4,8 +4,8 @@ defmodule Pipelines.Experimental.SendToUITest do
   @item %{title: "Title", author: "Me"}
 
   setup do
-    Crawly.Engine.start_spider(PipelineTestSpider)
-    on_exit(fn -> Crawly.Engine.stop_spider(PipelineTestSpider) end)
+    Crawly.Engine.start_spider(PipelineTestSpider, crawl_id: "send-to-ui-test")
+    on_exit(fn -> Crawly.Engine.stop_spider_by_name(PipelineTestSpider) end)
     :ok
   end
 
@@ -14,7 +14,7 @@ defmodule Pipelines.Experimental.SendToUITest do
       {Crawly.Pipelines.Experimental.SendToUI, ui_node: :"ui@127.0.0.1"}
     ]
 
-    state = %{spider_name: PipelineTestSpider}
+    state = %{spider_name: PipelineTestSpider, crawl_id: "send-to-ui-test"}
     {@item, state} = Crawly.Utils.pipe(pipelines, @item, state)
 
     job_tag = Map.get(state, :job_tag)

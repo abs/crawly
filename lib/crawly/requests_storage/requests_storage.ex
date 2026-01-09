@@ -28,6 +28,8 @@ defmodule Crawly.RequestsStorage do
 
   use GenServer
 
+  @type spider_key() :: {Crawly.spider(), crawl_id :: binary()}
+
   defstruct workers: %{}, pid_spiders: %{}
 
   alias Crawly.RequestsStorage
@@ -37,18 +39,18 @@ defmodule Crawly.RequestsStorage do
   @doc """
   Store individual request or multiple requests in related child worker
   """
-  @spec store(Crawly.spider(), Crawly.Request.t() | [Crawly.Request.t()]) ::
+  @spec store(spider_key(), Crawly.Request.t() | [Crawly.Request.t()]) ::
           :ok | {:error, :storage_worker_not_running}
-  def store(spider_name, %Crawly.Request{} = request),
-    do: GenServer.call(__MODULE__, {:store, {spider_name, [request]}})
+  def store(spider_key, %Crawly.Request{} = request),
+    do: GenServer.call(__MODULE__, {:store, {spider_key, [request]}})
 
-  def store(spider_name, requests) when is_list(requests) do
+  def store(spider_key, requests) when is_list(requests) do
     requests
     |> Stream.chunk_every(@batch_call_max_count)
-    |> Enum.each(&GenServer.call(__MODULE__, {:store, {spider_name, &1}}))
+    |> Enum.each(&GenServer.call(__MODULE__, {:store, {spider_key, &1}}))
   end
 
-  def store(_spider_name, request) do
+  def store(_spider_key, request) do
     Logger.error("#{inspect(request)} does not seem to be a request. Ignoring.")
     {:error, :not_request}
   end
@@ -56,26 +58,26 @@ defmodule Crawly.RequestsStorage do
   @doc """
   Pop a request out of requests storage
   """
-  @spec pop(Crawly.spider()) ::
+  @spec pop(spider_key()) ::
           nil | Crawly.Request.t() | {:error, :storage_worker_not_running}
-  def pop(spider_name) do
-    GenServer.call(__MODULE__, {:pop, spider_name})
+  def pop(spider_key) do
+    GenServer.call(__MODULE__, {:pop, spider_key})
   end
 
   @doc """
   Get statistics from the requests storage
   """
-  @spec stats(Crawly.spider()) ::
+  @spec stats(spider_key()) ::
           {:stored_requests, non_neg_integer()}
           | {:error, :storage_worker_not_running}
-  def stats(spider_name) do
-    GenServer.call(__MODULE__, {:stats, spider_name})
+  def stats(spider_key) do
+    GenServer.call(__MODULE__, {:stats, spider_key})
   end
 
-  @spec requests(atom()) ::
+  @spec requests(spider_key()) ::
           {:requests, [Crawly.Request.t()]} | {:error, :spider_not_running}
-  def requests(spider_name) do
-    GenServer.call(__MODULE__, {:requests, spider_name})
+  def requests(spider_key) do
+    GenServer.call(__MODULE__, {:requests, spider_key})
   end
 
   @doc """
@@ -84,7 +86,7 @@ defmodule Crawly.RequestsStorage do
   @spec start_worker(Crawly.spider(), crawl_id :: String.t()) ::
           {:ok, pid()} | {:error, :already_started}
   def start_worker(spider_name, crawl_id) do
-    GenServer.call(__MODULE__, {:start_worker, spider_name, crawl_id})
+    GenServer.call(__MODULE__, {:start_worker, {spider_name, crawl_id}})
   end
 
   def start_link([]) do
@@ -95,11 +97,11 @@ defmodule Crawly.RequestsStorage do
     {:ok, %RequestsStorage{}}
   end
 
-  def handle_call({:store, {spider_name, requests}}, _from, state) do
+  def handle_call({:store, {spider_key, requests}}, _from, state) do
     %{workers: workers} = state
 
     msg =
-      case Map.get(workers, spider_name) do
+      case Map.get(workers, spider_key) do
         nil ->
           {:error, :storage_worker_not_running}
 
@@ -110,9 +112,9 @@ defmodule Crawly.RequestsStorage do
     {:reply, msg, state}
   end
 
-  def handle_call({:pop, spider_name}, _from, %{workers: workers} = state) do
+  def handle_call({:pop, spider_key}, _from, %{workers: workers} = state) do
     resp =
-      case Map.get(workers, spider_name) do
+      case Map.get(workers, spider_key) do
         nil ->
           {:error, :storage_worker_not_running}
 
@@ -123,9 +125,9 @@ defmodule Crawly.RequestsStorage do
     {:reply, resp, state}
   end
 
-  def handle_call({:stats, spider_name}, _from, state) do
+  def handle_call({:stats, spider_key}, _from, state) do
     msg =
-      case Map.get(state.workers, spider_name) do
+      case Map.get(state.workers, spider_key) do
         nil ->
           {:error, :storage_worker_not_running}
 
@@ -136,9 +138,9 @@ defmodule Crawly.RequestsStorage do
     {:reply, msg, state}
   end
 
-  def handle_call({:requests, spider_name}, _from, state) do
+  def handle_call({:requests, spider_key}, _from, state) do
     msg =
-      case Map.get(state.workers, spider_name) do
+      case Map.get(state.workers, spider_key) do
         nil ->
           {:error, :storage_worker_not_running}
 
@@ -149,9 +151,13 @@ defmodule Crawly.RequestsStorage do
     {:reply, msg, state}
   end
 
-  def handle_call({:start_worker, spider_name, crawl_id}, _from, state) do
+  def handle_call(
+        {:start_worker, {spider_name, crawl_id} = spider_key},
+        _from,
+        state
+      ) do
     {msg, new_state} =
-      case Map.get(state.workers, spider_name) do
+      case Map.get(state.workers, spider_key) do
         nil ->
           {:ok, pid} =
             DynamicSupervisor.start_child(
@@ -167,8 +173,8 @@ defmodule Crawly.RequestsStorage do
 
           Process.monitor(pid)
 
-          new_workers = Map.put(state.workers, spider_name, pid)
-          new_spider_pids = Map.put(state.pid_spiders, pid, spider_name)
+          new_workers = Map.put(state.workers, spider_key, pid)
+          new_spider_pids = Map.put(state.pid_spiders, pid, spider_key)
 
           new_state = %{
             state
@@ -187,9 +193,9 @@ defmodule Crawly.RequestsStorage do
 
   # Clean up worker
   def handle_info({:DOWN, _ref, :process, pid, _}, state) do
-    spider_name = Map.get(state.pid_spiders, pid)
+    spider_key = Map.get(state.pid_spiders, pid)
     new_pid_spiders = Map.delete(state.pid_spiders, pid)
-    new_workers = Map.delete(state.workers, spider_name)
+    new_workers = Map.delete(state.workers, spider_key)
     new_state = %{state | workers: new_workers, pid_spiders: new_pid_spiders}
 
     {:noreply, new_state}

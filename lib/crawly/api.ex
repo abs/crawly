@@ -62,9 +62,16 @@ defmodule Crawly.API.Router do
       Enum.map(
         known_spiders,
         fn spider ->
+          # Find any running instance of this spider module
+          running_instance =
+            Enum.find(running_spiders, fn
+              {{name, _crawl_id}, _} -> name == spider.name
+              _ -> false
+            end)
+
           {crawl_id, state} =
-            case Map.get(running_spiders, spider) do
-              {_pid, crawl_id} -> {crawl_id, :running}
+            case running_instance do
+              {{_, cid}, {_pid, _}} -> {cid, :running}
               nil -> {nil, :idle}
             end
 
@@ -79,10 +86,11 @@ defmodule Crawly.API.Router do
                 {" - ", " -  "}
 
               true ->
-                {:stored_items, num} = Crawly.DataStorage.stats(spider)
+                spider_key = {spider.name, crawl_id}
+                {:stored_items, num} = Crawly.DataStorage.stats(spider_key)
 
                 {:stored_requests, scheduled} =
-                  Crawly.RequestsStorage.stats(spider)
+                  Crawly.RequestsStorage.stats(spider_key)
 
                 {num, scheduled}
             end
@@ -286,11 +294,12 @@ defmodule Crawly.API.Router do
     end
   end
 
-  get "/spiders/:spider_name/requests" do
+  get "/spiders/:spider_name/requests/:crawl_id" do
     spider_name = String.to_atom("Elixir.#{spider_name}")
+    spider_key = {spider_name, crawl_id}
 
     result =
-      case Crawly.RequestsStorage.requests(spider_name) do
+      case Crawly.RequestsStorage.requests(spider_key) do
         {:requests, result} ->
           Enum.map(result, fn req ->
             %{url: req.url, headers: inspect(req.headers)}
@@ -324,9 +333,10 @@ defmodule Crawly.API.Router do
     send_resp(conn, 200, msg)
   end
 
-  get "/spiders/:spider_name/stop" do
+  get "/spiders/:spider_name/stop/:crawl_id" do
     spider_name = String.to_atom("Elixir.#{spider_name}")
-    result = Crawly.Engine.stop_spider(spider_name, :manual_stop)
+    spider_key = {spider_name, crawl_id}
+    result = Crawly.Engine.stop_spider(spider_key, :manual_stop)
 
     msg =
       case result do
@@ -338,9 +348,10 @@ defmodule Crawly.API.Router do
     send_resp(conn, 200, msg)
   end
 
-  get "/spiders/:spider_name/scheduled-requests" do
+  get "/spiders/:spider_name/scheduled-requests/:crawl_id" do
     spider_name = String.to_atom("Elixir.#{spider_name}")
-    result = Crawly.RequestsStorage.stats(spider_name)
+    spider_key = {spider_name, crawl_id}
+    result = Crawly.RequestsStorage.stats(spider_key)
 
     msg =
       case result do
@@ -351,9 +362,10 @@ defmodule Crawly.API.Router do
     send_resp(conn, 200, msg)
   end
 
-  get "/spiders/:spider_name/scraped-items" do
+  get "/spiders/:spider_name/scraped-items/:crawl_id" do
     spider_name = String.to_existing_atom("Elixir.#{spider_name}")
-    result = Crawly.DataStorage.stats(spider_name)
+    spider_key = {spider_name, crawl_id}
+    result = Crawly.DataStorage.stats(spider_key)
 
     msg =
       case result do

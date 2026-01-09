@@ -405,20 +405,6 @@ defmodule Crawly.Utils do
     end
   end
 
-  @spec get_modules_from_applications() :: [module()]
-  def get_modules_from_applications do
-    Enum.reduce(Application.started_applications(), [], fn {app, _descr, _vsn},
-                                                           acc ->
-      case :application.get_key(app, :modules) do
-        {:ok, modules} ->
-          modules ++ acc
-
-        _other ->
-          acc
-      end
-    end)
-  end
-
   @doc """
   Wrapper function for Code.ensure_loaded?/1 to allow mocking
   """
