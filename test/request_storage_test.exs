@@ -4,11 +4,6 @@ defmodule RequestStorageTest do
   setup_all do
     :meck.new(:test_spider, [:non_strict])
     :meck.expect(:test_spider, :base_url, fn -> "example.com" end)
-
-    # Mock Gollum to avoid network calls in tests
-    :meck.new(Gollum, [:passthrough])
-    :meck.expect(Gollum, :crawlable?, fn _, _ -> :crawlable end)
-
     :ok
   end
 
