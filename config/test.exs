@@ -7,7 +7,7 @@ config :logger,
        level: :warning
 
 config :crawly,
-  start_http_api?: true,
+  start_http_api?: false,
   manager_operations_timeout: 500,
   # Stop spider after scraping certain amount of items
   closespider_itemcount: 100,
